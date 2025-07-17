@@ -205,137 +205,157 @@ def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
         unit_data = unit_data[unit_data['Date'] == selected_date]
         title_suffix = f" - {selected_date}"
         
-        # For daily analysis: adjust hours to start at 5 AM
-        unit_data['Adjusted_Hour'] = unit_data['Hour'].apply(lambda x: x - 5 if x >= 5 else x + 19)
+        # For daily analysis: 5 AM to midnight (19 hours)
+        unit_data_filtered = unit_data[unit_data['Hour'] >= 5]
         
         # Create heatmap data using actual car IDs
-        heatmap_data = unit_data.groupby(['CAR_ID', 'Adjusted_Hour'])['derate_gap'].mean().reset_index()
-        heatmap_pivot = heatmap_data.pivot(index='CAR_ID', columns='Adjusted_Hour', values='derate_gap')
+        heatmap_data = unit_data_filtered.groupby(['CAR_ID', 'Hour'])['derate_gap'].mean().reset_index()
+        heatmap_pivot = heatmap_data.pivot(index='CAR_ID', columns='Hour', values='derate_gap')
         heatmap_pivot = heatmap_pivot.fillna(0)
         
-        # Create hour labels starting from 5 AM
-        hour_labels = []
-        for h in range(24):
-            actual_hour = (h + 5) % 24
-            hour_labels.append(f"{actual_hour:02d}:00")
+        # Create hour labels from 5 AM to midnight
+        available_hours = sorted(heatmap_pivot.columns)
+        hour_labels = [f"{h:02d}:00" for h in available_hours]
         
-        x_labels = hour_labels
-        y_labels = [str(car_id) for car_id in heatmap_pivot.index]
+        # Create individual traces for each car (for legend functionality)
+        fig = go.Figure()
         
-        fig = go.Figure(data=go.Heatmap(
-            z=heatmap_pivot.values,
-            x=x_labels,
-            y=y_labels,
-            colorscale=[
-                [0, '#D3D3D3'],      # Light Grey (0%)
-                [0.05, '#D3D3D3'],   # Light Grey (0-5%)
-                [0.1, '#FFFF00'],    # Yellow (5-10%)
-                [0.2, '#FFA500'],    # Amber (10-20%)
-                [0.35, '#FF8C00'],   # Dark Amber (20-35%)
-                [1, '#8B0000']       # Dark Red (35%+)
-            ],
-            hoverongaps=False,
-            hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
-            colorbar=dict(title="Derate %"),
-            zmin=0,
-            zmax=40
-        ))
+        car_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']  # Different colors for each car
         
-        fig.update_layout(
-            title=f'Unit {unit_id} - Car Performance{title_suffix}',
-            xaxis_title="Hour of Day (Starting 5 AM)",
-            yaxis_title="Car ID",
-            height=400,
-            font=dict(size=12)
-        )
-        
-    else:
-        title_suffix = " - Weekly Overview"
-        
-        # For weekly analysis: create structured layout with day breaks
-        # Adjust hours to start at 5 AM
-        unit_data['Adjusted_Hour'] = unit_data['Hour'].apply(lambda x: x - 5 if x >= 5 else x + 19)
-        
-        # Get unique dates and car IDs
-        dates = sorted(unit_data['Date'].unique())
-        car_ids = sorted(unit_data['CAR_ID'].unique())
-        
-        # Create structured data with separators
-        all_data = []
-        y_labels = []
-        
-        for i, date in enumerate(dates):
-            # Add cars for this date
-            for car_id in car_ids:
-                date_car_data = unit_data[(unit_data['Date'] == date) & (unit_data['CAR_ID'] == car_id)]
-                hourly_data = date_car_data.groupby('Adjusted_Hour')['derate_gap'].mean()
-                
-                # Create full 24-hour row
-                row_data = []
-                for hour in range(24):
-                    row_data.append(hourly_data.get(hour, 0))
-                
-                all_data.append(row_data)
-                y_labels.append(f"{date} - {car_id}")
+        for i, car_id in enumerate(sorted(heatmap_pivot.index)):
+            car_data = heatmap_pivot.loc[car_id].values
             
-            # Add separator row (white line) between days, except after last day
-            if i < len(dates) - 1:
-                separator_row = [None] * 24  # None values will appear as gaps
-                all_data.append(separator_row)
-                y_labels.append("")  # Empty label for separator
+            # Apply color mapping based on derate values
+            colors = []
+            for val in car_data:
+                if val == 0:
+                    colors.append('#D3D3D3')  # Light Grey
+                elif val <= 10:
+                    colors.append('#FFFF00')  # Yellow
+                elif val <= 20:
+                    colors.append('#FFA500')  # Amber
+                elif val <= 35:
+                    colors.append('#FF8C00')  # Dark Amber
+                else:
+                    colors.append('#8B0000')  # Dark Red
+            
+            fig.add_trace(go.Bar(
+                x=hour_labels,
+                y=[1] * len(hour_labels),  # Same height for all
+                name=f"Car {car_id}",
+                marker_color=colors,
+                yaxis=f'y{i+1}',
+                hovertemplate=f'<b>Car {car_id}</b><br>Hour: %{{x}}<br>Derate: %{{customdata:.1f}}%<extra></extra>',
+                customdata=car_data,
+                visible=True
+            ))
         
-        # Convert to numpy array
-        z_data = np.array(all_data)
+        # Update layout with multiple y-axes for each car
+        layout_updates = {
+            'title': f'Unit {unit_id} - Car Performance{title_suffix}',
+            'xaxis_title': "Hour of Day (5 AM to Midnight)",
+            'height': 500,
+            'font': dict(size=12),
+            'showlegend': True,
+            'legend': dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
+        }
         
-        # Create hour labels starting from 5 AM
-        hour_labels = []
-        for h in range(24):
-            actual_hour = (h + 5) % 24
-            hour_labels.append(f"{actual_hour:02d}:00")
-        
-        fig = go.Figure(data=go.Heatmap(
-            z=z_data,
-            x=hour_labels,
-            y=y_labels,
-            colorscale=[
-                [0, '#D3D3D3'],      # Light Grey (0%)
-                [0.05, '#D3D3D3'],   # Light Grey (0-5%)
-                [0.1, '#FFFF00'],    # Yellow (5-10%)
-                [0.2, '#FFA500'],    # Amber (10-20%)
-                [0.35, '#FF8C00'],   # Dark Amber (20-35%)
-                [1, '#8B0000']       # Dark Red (35%+)
-            ],
-            hoverongaps=False,
-            hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
-            colorbar=dict(title="Derate %"),
-            zmin=0,
-            zmax=40
-        ))
-        
-        # Add horizontal lines between days
-        line_positions = []
-        current_pos = 0
-        for i, date in enumerate(dates[:-1]):  # Don't add line after last day
-            current_pos += len(car_ids)  # Move past cars for this day
-            line_positions.append(current_pos - 0.5)  # Position line between days
-            current_pos += 1  # Account for separator row
-        
-        # Add white horizontal lines
-        for line_pos in line_positions:
-            fig.add_hline(
-                y=line_pos, 
-                line_width=3, 
-                line_color="white",
-                opacity=1
+        # Create subplots for each car
+        for i, car_id in enumerate(sorted(heatmap_pivot.index)):
+            layout_updates[f'yaxis{i+1}'] = dict(
+                title=f"Car {car_id}",
+                domain=[i/len(heatmap_pivot.index), (i+1)/len(heatmap_pivot.index)],
+                showticklabels=False
             )
         
+        fig.update_layout(**layout_updates)
+        
+    else:
+        # Weekly analysis: Create 7 separate heatmaps
+        title_suffix = " - Weekly Overview"
+        
+        # Get unique dates
+        dates = sorted(unit_data['Date'].unique())
+        
+        # Create subplot with 7 days
+        fig = make_subplots(
+            rows=7, cols=1,
+            subplot_titles=[f"{date} ({pd.to_datetime(date).strftime('%A')})" for date in dates],
+            vertical_spacing=0.02,
+            specs=[[{"secondary_y": False}] for _ in range(7)]
+        )
+        
+        # Color scale for values
+        def get_color(val):
+            if val == 0:
+                return '#D3D3D3'  # Light Grey
+            elif val <= 10:
+                return '#FFFF00'  # Yellow
+            elif val <= 20:
+                return '#FFA500'  # Amber
+            elif val <= 35:
+                return '#FF8C00'  # Dark Amber
+            else:
+                return '#8B0000'  # Dark Red
+        
+        # Add heatmap for each day
+        for day_idx, date in enumerate(dates):
+            day_data = unit_data[unit_data['Date'] == date]
+            day_filtered = day_data[day_data['Hour'] >= 5]  # 5 AM to midnight
+            
+            # Create heatmap data for this day
+            day_heatmap = day_filtered.groupby(['CAR_ID', 'Hour'])['derate_gap'].mean().reset_index()
+            day_pivot = day_heatmap.pivot(index='CAR_ID', columns='Hour', values='derate_gap')
+            day_pivot = day_pivot.fillna(0)
+            
+            if not day_pivot.empty:
+                available_hours = sorted(day_pivot.columns)
+                hour_labels = [f"{h:02d}:00" for h in available_hours]
+                
+                # Add each car as a separate trace for this day
+                for car_idx, car_id in enumerate(sorted(day_pivot.index)):
+                    car_data = day_pivot.loc[car_id].values
+                    colors = [get_color(val) for val in car_data]
+                    
+                    fig.add_trace(
+                        go.Bar(
+                            x=hour_labels,
+                            y=[1] * len(hour_labels),
+                            name=f"Car {car_id}" if day_idx == 0 else f"Car {car_id}",
+                            marker_color=colors,
+                            hovertemplate=f'<b>Car {car_id}</b><br>Hour: %{{x}}<br>Derate: %{{customdata:.1f}}%<extra></extra>',
+                            customdata=car_data,
+                            showlegend=(day_idx == 0),  # Only show legend for first day
+                            legendgroup=f"car_{car_id}",
+                            visible=True
+                        ),
+                        row=day_idx+1, col=1
+                    )
+        
         fig.update_layout(
             title=f'Unit {unit_id} - Car Performance{title_suffix}',
-            xaxis_title="Hour of Day (Starting 5 AM)",
-            yaxis_title="Date - Car ID",
-            height=800,
-            font=dict(size=12)
+            height=1200,  # Taller for 7 days
+            font=dict(size=10),
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            )
         )
+        
+        # Update x-axes for all subplots
+        for i in range(7):
+            fig.update_xaxes(title_text="Hour of Day (5 AM to Midnight)" if i == 6 else "", row=i+1, col=1)
+            fig.update_yaxes(showticklabels=False, row=i+1, col=1)
     
     return fig
 
