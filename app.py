@@ -721,12 +721,7 @@ def main():
         with tab2:
             st.markdown("### Fleet Analysis")
             
-            # Fleet comparison
-            fleet_comparison_fig = create_fleet_comparison(df)
-            if fleet_comparison_fig:
-                st.plotly_chart(fleet_comparison_fig, use_container_width=True)
-            
-            # Fleet overview with daily tabs
+            # Fleet overview with daily tabs (moved to first position)
             st.markdown("### Fleet Overview - Daily Performance")
             
             # Get available dates
@@ -742,13 +737,13 @@ def main():
                     
                     if not day_data.empty:
                         # Create ordered car list: Unit 180108 first, then Unit 180112
-                        unit_180108_cars = ['50908', '54908', '55908', '56908', '59908']
-                        unit_180112_cars = ['50912', '54912', '55912', '56912', '59912']
+                        unit_180108_cars = [50908, 54908, 55908, 56908, 59908]
+                        unit_180112_cars = [50912, 54912, 55912, 56912, 59912]
                         ordered_cars = unit_180108_cars + unit_180112_cars
                         
-                        # Create heatmap data
-                        fleet_heatmap_data = day_data.groupby(['CAR_ID', 'Hour'])['derate_gap'].mean().reset_index()
-                        fleet_pivot = fleet_heatmap_data.pivot(index='CAR_ID', columns='Hour', values='derate_gap')
+                        # Create heatmap data using integer car IDs
+                        fleet_heatmap_data = day_data.groupby(['equipment_id', 'Hour'])['derate_gap'].mean().reset_index()
+                        fleet_pivot = fleet_heatmap_data.pivot(index='equipment_id', columns='Hour', values='derate_gap')
                         fleet_pivot = fleet_pivot.fillna(0)
                         
                         # Reorder rows according to our specified order
@@ -772,7 +767,7 @@ def main():
                         fleet_fig = go.Figure(data=go.Heatmap(
                             z=fleet_pivot.values,
                             x=hour_labels,
-                            y=fleet_pivot.index,
+                            y=[str(int(car)) for car in fleet_pivot.index],  # Convert to int to remove commas
                             colorscale=colorscale,
                             hoverongaps=False,
                             hovertemplate='<b>Car %{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
@@ -782,7 +777,7 @@ def main():
                         ))
                         
                         fleet_fig.update_layout(
-                            title=f'Fleet Performance - {date}',
+                            title=f'Fleet Performance - {date.strftime("%d-%m")}',
                             xaxis_title="Hour of Day (5 AM to Midnight)",
                             yaxis_title="Car ID",
                             height=600
@@ -790,7 +785,7 @@ def main():
                         
                         st.plotly_chart(fleet_fig, use_container_width=True)
                     else:
-                        st.info(f"No data available for {date}")
+                        st.info(f"No data available for {date.strftime('%d-%m')}")
             
             # Problem car ranking
             st.markdown("### Problem Car Ranking")
@@ -820,7 +815,7 @@ def main():
                     st.markdown('<div class="alert-card">', unsafe_allow_html=True)
                     st.markdown("**🚨 Top 3 Problem Cars:**")
                     for _, row in top_problems.iterrows():
-                        st.markdown(f"• **Car {row['CAR_ID']} (Unit {row['UNIT']})**: Problem Score {row['Problem_Score']:.1f}")
+                        st.markdown(f"• **Car {int(row['CAR_ID'])} (Unit {row['UNIT']})**: Problem Score {row['Problem_Score']:.1f}")
                     st.markdown('</div>', unsafe_allow_html=True)
         
         # Download section
