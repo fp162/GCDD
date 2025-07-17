@@ -884,14 +884,17 @@ def main():
                             else:
                                 colors.append('#8B0000')  # Dark Red
                 
-                # Create 3D bar chart
-                volume_fig = go.Figure(data=go.Bar3d(
+                # Create 3D scatter plot with sized markers to simulate volume bars
+                volume_fig = go.Figure(data=go.Scatter3d(
                     x=x_data,
                     y=y_data,
                     z=z_data,
+                    mode='markers',
                     marker=dict(
+                        size=[max(3, z/2) for z in z_data],  # Size based on derate value
                         color=colors,
-                        opacity=0.8
+                        opacity=0.8,
+                        symbol='square'
                     ),
                     hovertemplate='<b>Car: %{customdata[0]}</b><br>' +
                                   'Time: %{customdata[1]}<br>' +
