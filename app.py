@@ -780,7 +780,13 @@ def main():
                             title=f'Fleet Performance - {date.strftime("%d-%m")}',
                             xaxis_title="Hour of Day (5 AM to Midnight)",
                             yaxis_title="Car ID",
-                            height=600
+                            height=600,
+                            yaxis=dict(
+                                tickmode='array',
+                                tickvals=list(range(len(fleet_pivot.index))),
+                                ticktext=[str(int(car)) for car in fleet_pivot.index],
+                                type='category'
+                            )
                         )
                         
                         st.plotly_chart(fleet_fig, use_container_width=True)
