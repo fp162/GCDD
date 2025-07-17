@@ -222,20 +222,70 @@ def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
         x_labels = hour_labels
         y_labels = [str(car_id) for car_id in heatmap_pivot.index]
         
+        fig = go.Figure(data=go.Heatmap(
+            z=heatmap_pivot.values,
+            x=x_labels,
+            y=y_labels,
+            colorscale=[
+                [0, '#D3D3D3'],      # Light Grey (0%)
+                [0.05, '#D3D3D3'],   # Light Grey (0-5%)
+                [0.1, '#FFFF00'],    # Yellow (5-10%)
+                [0.2, '#FFA500'],    # Amber (10-20%)
+                [0.35, '#FF8C00'],   # Dark Amber (20-35%)
+                [1, '#8B0000']       # Dark Red (35%+)
+            ],
+            hoverongaps=False,
+            hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
+            colorbar=dict(title="Derate %"),
+            zmin=0,
+            zmax=40
+        ))
+        
+        fig.update_layout(
+            title=f'Unit {unit_id} - Car Performance{title_suffix}',
+            xaxis_title="Hour of Day (Starting 5 AM)",
+            yaxis_title="Car ID",
+            height=400,
+            font=dict(size=12)
+        )
+        
     else:
         title_suffix = " - Weekly Overview"
         
-        # For weekly analysis: show cars × days
-        # Create a combination of Date and CAR_ID for Y-axis
-        unit_data['Date_Car'] = unit_data['Date'].astype(str) + ' - ' + unit_data['CAR_ID']
-        
+        # For weekly analysis: create structured layout with day breaks
         # Adjust hours to start at 5 AM
         unit_data['Adjusted_Hour'] = unit_data['Hour'].apply(lambda x: x - 5 if x >= 5 else x + 19)
         
-        # Create heatmap data
-        heatmap_data = unit_data.groupby(['Date_Car', 'Adjusted_Hour'])['derate_gap'].mean().reset_index()
-        heatmap_pivot = heatmap_data.pivot(index='Date_Car', columns='Adjusted_Hour', values='derate_gap')
-        heatmap_pivot = heatmap_pivot.fillna(0)
+        # Get unique dates and car IDs
+        dates = sorted(unit_data['Date'].unique())
+        car_ids = sorted(unit_data['CAR_ID'].unique())
+        
+        # Create structured data with separators
+        all_data = []
+        y_labels = []
+        
+        for i, date in enumerate(dates):
+            # Add cars for this date
+            for car_id in car_ids:
+                date_car_data = unit_data[(unit_data['Date'] == date) & (unit_data['CAR_ID'] == car_id)]
+                hourly_data = date_car_data.groupby('Adjusted_Hour')['derate_gap'].mean()
+                
+                # Create full 24-hour row
+                row_data = []
+                for hour in range(24):
+                    row_data.append(hourly_data.get(hour, 0))
+                
+                all_data.append(row_data)
+                y_labels.append(f"{date} - {car_id}")
+            
+            # Add separator row (white line) between days, except after last day
+            if i < len(dates) - 1:
+                separator_row = [None] * 24  # None values will appear as gaps
+                all_data.append(separator_row)
+                y_labels.append("")  # Empty label for separator
+        
+        # Convert to numpy array
+        z_data = np.array(all_data)
         
         # Create hour labels starting from 5 AM
         hour_labels = []
@@ -243,38 +293,49 @@ def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
             actual_hour = (h + 5) % 24
             hour_labels.append(f"{actual_hour:02d}:00")
         
-        x_labels = hour_labels
-        y_labels = heatmap_pivot.index
-    
-    # Define your color scale
-    colorscale = [
-        [0, '#D3D3D3'],      # Light Grey (0%)
-        [0.05, '#D3D3D3'],   # Light Grey (0-5%)
-        [0.1, '#FFFF00'],    # Yellow (5-10%)
-        [0.2, '#FFA500'],    # Amber (10-20%)
-        [0.35, '#FF8C00'],   # Dark Amber (20-35%)
-        [1, '#8B0000']       # Dark Red (35%+)
-    ]
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=heatmap_pivot.values,
-        x=x_labels,
-        y=y_labels,
-        colorscale=colorscale,
-        hoverongaps=False,
-        hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
-        colorbar=dict(title="Derate %"),
-        zmin=0,
-        zmax=40
-    ))
-    
-    fig.update_layout(
-        title=f'Unit {unit_id} - Car Performance{title_suffix}',
-        xaxis_title="Hour of Day (Starting 5 AM)",
-        yaxis_title="Car ID" if period == 'daily' else "Date - Car ID",
-        height=400 if period == 'daily' else 800,  # Taller for weekly view
-        font=dict(size=12)
-    )
+        fig = go.Figure(data=go.Heatmap(
+            z=z_data,
+            x=hour_labels,
+            y=y_labels,
+            colorscale=[
+                [0, '#D3D3D3'],      # Light Grey (0%)
+                [0.05, '#D3D3D3'],   # Light Grey (0-5%)
+                [0.1, '#FFFF00'],    # Yellow (5-10%)
+                [0.2, '#FFA500'],    # Amber (10-20%)
+                [0.35, '#FF8C00'],   # Dark Amber (20-35%)
+                [1, '#8B0000']       # Dark Red (35%+)
+            ],
+            hoverongaps=False,
+            hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
+            colorbar=dict(title="Derate %"),
+            zmin=0,
+            zmax=40
+        ))
+        
+        # Add horizontal lines between days
+        line_positions = []
+        current_pos = 0
+        for i, date in enumerate(dates[:-1]):  # Don't add line after last day
+            current_pos += len(car_ids)  # Move past cars for this day
+            line_positions.append(current_pos - 0.5)  # Position line between days
+            current_pos += 1  # Account for separator row
+        
+        # Add white horizontal lines
+        for line_pos in line_positions:
+            fig.add_hline(
+                y=line_pos, 
+                line_width=3, 
+                line_color="white",
+                opacity=1
+            )
+        
+        fig.update_layout(
+            title=f'Unit {unit_id} - Car Performance{title_suffix}',
+            xaxis_title="Hour of Day (Starting 5 AM)",
+            yaxis_title="Date - Car ID",
+            height=800,
+            font=dict(size=12)
+        )
     
     return fig
 
