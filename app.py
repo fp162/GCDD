@@ -616,15 +616,31 @@ def main():
         with st.expander("📊 Data Overview", expanded=False):
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Total Records", len(df))
+                st.metric(
+                    "Total Records", 
+                    len(df),
+                    help="Total number of hourly data points across all cars and dates"
+                )
             with col2:
-                st.metric("Units", df['UNIT'].nunique())
+                st.metric(
+                    "Units", 
+                    df['UNIT'].nunique(),
+                    help="Number of train units in the analysis (should be 2: 180108 and 180112)"
+                )
             with col3:
-                st.metric("Cars", df['equipment_id'].nunique())
+                st.metric(
+                    "Cars", 
+                    df['equipment_id'].nunique(),
+                    help="Total number of cars across all units (should be 10: 5 cars per unit)"
+                )
             with col4:
                 active_data = df[df['derate_gap'] > 5]
                 fleet_active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
-                st.metric("Fleet Active Avg", f"{fleet_active_avg:.1f}%")
+                st.metric(
+                    "Fleet Active Avg", 
+                    f"{fleet_active_avg:.1f}%",
+                    help="Fleet-wide average derate when >5% - overall performance excluding normal operation"
+                )
             
             # Fleet structure
             st.markdown("**Fleet Structure:**")
@@ -643,15 +659,27 @@ def main():
             col1, col2, col3 = st.columns([1, 1, 1])
             
             with col1:
-                selected_unit = st.selectbox("Select Unit:", df['UNIT'].unique())
+                selected_unit = st.selectbox(
+                    "Select Unit:", 
+                    df['UNIT'].unique(),
+                    help="Choose which train unit to analyze (180108 or 180112)"
+                )
             
             with col2:
-                period = st.selectbox("Analysis Period:", ["Daily Analysis", "Weekly Analysis"])
+                period = st.selectbox(
+                    "Analysis Period:", 
+                    ["Daily Analysis", "Weekly Analysis"],
+                    help="Daily Analysis shows one specific day, Weekly Analysis shows patterns across all 7 days"
+                )
             
             with col3:
                 if period == "Daily Analysis":
                     available_dates = sorted(df['Date'].unique())
-                    selected_date = st.selectbox("Select Date:", available_dates)
+                    selected_date = st.selectbox(
+                        "Select Date:", 
+                        available_dates,
+                        help="Pick a specific date to analyze in detail (only for Daily Analysis)"
+                    )
                 else:
                     selected_date = None
             
@@ -712,13 +740,30 @@ def main():
                     if col in unit_metrics.columns:
                         unit_metrics[col] = unit_metrics[col].round(2)
                 
+                # Add column explanations
+                st.markdown("**Column Definitions:**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("""
+                    - **UNIT**: Train unit asset ID (180108 or 180112)
+                    - **CAR**: Car position within train unit (1-5)
+                    - **CAR_ID**: Unique equipment identifier for maintenance
+                    - **Active_Avg_Derate**: Average derate when >5% (excludes normal operation)
+                    """)
+                with col2:
+                    st.markdown("""
+                    - **Max_Derate**: Highest derate percentage recorded
+                    - **Warning_Hours**: Hours with derate >10% (moderate issues)
+                    - **High_Derate_Hours**: Hours with derate >20% (severe issues)
+                    """)
+                
                 st.dataframe(unit_metrics, use_container_width=True)
         
         with tab2:
             st.markdown("### Fleet Analysis")
             
             # Fleet overview with daily tabs (moved to first position)
-            st.markdown("### Fleet Overview - Daily Performance")
+            st.markdown("### Fleet Overview - Daily Performance", help="Click each tab to see that day's performance. Each tab shows all 10 cars for one specific day")
             
             # Get available dates
             available_dates = sorted(df['Date'].unique())
@@ -773,7 +818,7 @@ def main():
                         ))
                         
                         fleet_fig.update_layout(
-                            title=f'Fleet Performance - {date.strftime("%d-%m")}',
+                            title=f'Fleet Performance - {date.strftime("%d-%m")} (All cars: Unit 180108 first, then 180112. Colors: Grey=normal, Yellow=minor, Amber=moderate, Dark Amber=serious, Red=critical)',
                             xaxis_title="Hour of Day (5 AM to Midnight)",
                             yaxis_title="Car ID",
                             height=600,
@@ -790,7 +835,7 @@ def main():
                         st.info(f"No data available for {date.strftime('%d-%m')}")
             
             # Problem car ranking
-            st.markdown("### Problem Car Ranking")
+            st.markdown("### Problem Car Ranking", help="Cars ranked by Risk Score - highest risk cars appear first for maintenance prioritization")
             fleet_metrics = calculate_hybrid_metrics(df)
             if not fleet_metrics.empty:
                 # Calculate risk score
@@ -809,6 +854,24 @@ def main():
                 for col in numeric_cols:
                     if col in fleet_metrics.columns:
                         fleet_metrics[col] = fleet_metrics[col].round(2)
+                
+                # Add column explanations
+                st.markdown("**Column Definitions:**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("""
+                    - **UNIT**: Train unit asset ID (180108 or 180112)
+                    - **CAR**: Car position within train unit (1-5)
+                    - **CAR_ID**: Unique equipment identifier for maintenance
+                    - **Active_Avg_Derate**: Average derate when >5% (excludes normal operation)
+                    - **Max_Derate**: Highest derate percentage recorded
+                    """)
+                with col2:
+                    st.markdown("""
+                    - **Warning_Hours**: Hours with derate >10% (moderate issues)
+                    - **High_Derate_Hours**: Hours with derate >20% (severe issues)
+                    - **Risk_Score**: 40% High_Derate_Hours + 30% Max_Derate + 20% Warning_Hours + 10% Active_Avg_Derate
+                    """)
                 
                 st.dataframe(fleet_metrics, use_container_width=True)
                 
