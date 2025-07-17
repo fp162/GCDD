@@ -823,6 +823,111 @@ def main():
                     for _, row in top_problems.iterrows():
                         st.markdown(f"• **Car {int(row['CAR_ID'])} (Unit {row['UNIT']})**: Problem Score {row['Problem_Score']:.1f}")
                     st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Weekly Volume Bar Chart
+            st.markdown("### Weekly Derate Volume Analysis")
+            
+            # Filter data for 5 AM to midnight across all days
+            volume_data = df[df['Hour'] >= 5].copy()
+            
+            if not volume_data.empty:
+                # Create ordered car list
+                unit_180108_cars = [50908, 54908, 55908, 56908, 59908]
+                unit_180112_cars = [50912, 54912, 55912, 56912, 59912]
+                ordered_cars = unit_180108_cars + unit_180112_cars
+                
+                # Create time labels (Day-Hour combinations)
+                dates = sorted(volume_data['Date'].unique())
+                hours = list(range(5, 24))  # 5 AM to 11 PM
+                
+                time_labels = []
+                for date in dates:
+                    for hour in hours:
+                        time_labels.append(f"{date.strftime('%d-%m')}_{hour:02d}:00")
+                
+                # Prepare data for 3D bar chart
+                x_data = []  # Time indices
+                y_data = []  # Car indices
+                z_data = []  # Derate values
+                colors = []  # Bar colors
+                
+                car_positions = {car: i for i, car in enumerate(ordered_cars)}
+                
+                for time_idx, (date, hour) in enumerate([(d, h) for d in dates for h in hours]):
+                    for car in ordered_cars:
+                        if car in volume_data['equipment_id'].values:
+                            # Get derate value for this car at this time
+                            car_data = volume_data[
+                                (volume_data['Date'] == date) & 
+                                (volume_data['Hour'] == hour) & 
+                                (volume_data['equipment_id'] == car)
+                            ]
+                            
+                            if not car_data.empty:
+                                derate_val = car_data['derate_gap'].iloc[0]
+                            else:
+                                derate_val = 0
+                            
+                            x_data.append(time_idx)
+                            y_data.append(car_positions[car])
+                            z_data.append(derate_val)
+                            
+                            # Assign color based on derate value
+                            if derate_val == 0:
+                                colors.append('#D3D3D3')  # Light Grey
+                            elif derate_val <= 10:
+                                colors.append('#FFFF00')  # Yellow
+                            elif derate_val <= 20:
+                                colors.append('#FFA500')  # Amber
+                            elif derate_val <= 35:
+                                colors.append('#FF8C00')  # Dark Amber
+                            else:
+                                colors.append('#8B0000')  # Dark Red
+                
+                # Create 3D bar chart
+                volume_fig = go.Figure(data=go.Bar3d(
+                    x=x_data,
+                    y=y_data,
+                    z=z_data,
+                    marker=dict(
+                        color=colors,
+                        opacity=0.8
+                    ),
+                    hovertemplate='<b>Car: %{customdata[0]}</b><br>' +
+                                  'Time: %{customdata[1]}<br>' +
+                                  'Derate: %{z:.1f}%<br>' +
+                                  '<extra></extra>',
+                    customdata=[[ordered_cars[y_data[i]], time_labels[x_data[i]]] for i in range(len(x_data))]
+                ))
+                
+                # Update layout for 3D chart
+                volume_fig.update_layout(
+                    title='Weekly Derate Volume - All Cars Across 7 Days',
+                    scene=dict(
+                        xaxis_title="Time (Day-Hour)",
+                        yaxis_title="Car ID",
+                        zaxis_title="Derate %",
+                        xaxis=dict(
+                            tickmode='array',
+                            tickvals=list(range(0, len(time_labels), 19)),  # Show every day
+                            ticktext=[dates[i].strftime('%d-%m') for i in range(len(dates))]
+                        ),
+                        yaxis=dict(
+                            tickmode='array',
+                            tickvals=list(range(len(ordered_cars))),
+                            ticktext=[str(car) for car in ordered_cars]
+                        ),
+                        camera=dict(
+                            eye=dict(x=1.5, y=1.5, z=1.2)
+                        )
+                    ),
+                    height=700,
+                    font=dict(size=12)
+                )
+                
+                st.plotly_chart(volume_fig, use_container_width=True)
+            else:
+                st.info("No data available for volume analysis")
         
         # Download section
         st.markdown("---")
