@@ -166,11 +166,9 @@ def calculate_hybrid_metrics(df, unit_id=None, date=None):
     for car_info in filtered_df.groupby(['UNIT', 'CAR', 'CAR_ID']):
         (unit, car_num, car_id), car_data = car_info
         
-        # Hybrid metrics
-        total_hours = len(car_data)
-        operational_hours = (car_data['derate_gap'] >= 0).sum()  # ALL hours including 0% derate
-        warning_hours = (car_data['derate_gap'] > 10).sum()  # Renamed from problem_hours
-        high_derate_hours = (car_data['derate_gap'] > 20).sum()  # Renamed from critical_hours
+        # Metrics for operational train data
+        warning_hours = (car_data['derate_gap'] > 10).sum()  # Moderate issues
+        high_derate_hours = (car_data['derate_gap'] > 20).sum()  # Severe issues
         
         # Active derate average (only when > 5%)
         active_derate_data = car_data[car_data['derate_gap'] > 5]
@@ -179,20 +177,14 @@ def calculate_hybrid_metrics(df, unit_id=None, date=None):
         # Max derate
         max_derate = car_data['derate_gap'].max()
         
-        # Operational ratio
-        operational_ratio = (operational_hours / total_hours * 100) if total_hours > 0 else 0
-        
         metrics.append({
             'UNIT': unit,
             'CAR': car_num,
             'CAR_ID': car_id,
             'Active_Avg_Derate': active_avg,
             'Max_Derate': max_derate,
-            'Warning_Hours': warning_hours,  # Renamed from Problem_Hours
-            'High_Derate_Hours': high_derate_hours,  # Renamed from Critical_Hours
-            'Operational_Hours': operational_hours,
-            'Operational_Ratio': operational_ratio,
-            'Total_Hours': total_hours
+            'Warning_Hours': warning_hours,
+            'High_Derate_Hours': high_derate_hours
         })
     
     return pd.DataFrame(metrics)
@@ -797,18 +789,19 @@ def main():
             st.markdown("### Problem Car Ranking")
             fleet_metrics = calculate_hybrid_metrics(df)
             if not fleet_metrics.empty:
-                # Calculate problem score
-                fleet_metrics['Problem_Score'] = (
-                    fleet_metrics['Active_Avg_Derate'] * 0.4 +
+                # Calculate risk score
+                fleet_metrics['Risk_Score'] = (
+                    fleet_metrics['High_Derate_Hours'] * 0.4 +
                     fleet_metrics['Max_Derate'] * 0.3 +
-                    (fleet_metrics['Warning_Hours'] / fleet_metrics['Total_Hours'] * 100) * 0.3
+                    fleet_metrics['Warning_Hours'] * 0.2 +
+                    fleet_metrics['Active_Avg_Derate'] * 0.1
                 )
                 
-                # Sort by problem score
-                fleet_metrics = fleet_metrics.sort_values('Problem_Score', ascending=False)
+                # Sort by risk score
+                fleet_metrics = fleet_metrics.sort_values('Risk_Score', ascending=False)
                 
                 # Round numeric columns
-                numeric_cols = ['Active_Avg_Derate', 'Max_Derate', 'Operational_Ratio', 'Problem_Score']
+                numeric_cols = ['Active_Avg_Derate', 'Max_Derate', 'Risk_Score']
                 for col in numeric_cols:
                     if col in fleet_metrics.columns:
                         fleet_metrics[col] = fleet_metrics[col].round(2)
@@ -821,7 +814,7 @@ def main():
                     st.markdown('<div class="alert-card">', unsafe_allow_html=True)
                     st.markdown("**🚨 Top 3 Problem Cars:**")
                     for _, row in top_problems.iterrows():
-                        st.markdown(f"• **Car {int(row['CAR_ID'])} (Unit {row['UNIT']})**: Problem Score {row['Problem_Score']:.1f}")
+                        st.markdown(f"• **Car {int(row['CAR_ID'])} (Unit {row['UNIT']})**: Risk Score {row['Risk_Score']:.1f}")
                     st.markdown('</div>', unsafe_allow_html=True)
             
             # Weekly Volume Bar Chart
