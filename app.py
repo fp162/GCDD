@@ -436,10 +436,10 @@ def create_car_performance_bars(df, unit_id):
     """Create car performance bar chart"""
     unit_data = df[df['UNIT'] == unit_id].copy()
     
-    # Calculate metrics per car using actual car IDs
+    # Calculate metrics per car using actual car IDs in ascending order
     car_metrics = []
-    for car_id in sorted(unit_data['CAR_ID'].unique()):
-        car_data = unit_data[unit_data['CAR_ID'] == car_id]
+    for car_id in sorted(unit_data['equipment_id'].unique()):  # Use equipment_id for proper sorting
+        car_data = unit_data[unit_data['equipment_id'] == car_id]
         
         # Active derate average
         active_data = car_data[car_data['derate_gap'] > 5]
@@ -448,27 +448,27 @@ def create_car_performance_bars(df, unit_id):
         # Max derate
         max_derate = car_data['derate_gap'].max()
         
-        # Problem hours
-        problem_hours = (car_data['derate_gap'] > 10).sum()
+        # Warning hours (renamed from problem hours)
+        warning_hours = (car_data['derate_gap'] > 10).sum()
         
         car_metrics.append({
-            'CAR_ID': car_id,
+            'equipment_id': car_id,
             'Active_Avg': active_avg,
             'Max_Derate': max_derate,
-            'Problem_Hours': problem_hours
+            'Warning_Hours': warning_hours
         })
     
     metrics_df = pd.DataFrame(car_metrics)
     
     fig = make_subplots(
         rows=1, cols=3,
-        subplot_titles=('Active Derate Average', 'Max Derate', 'Problem Hours'),
+        subplot_titles=('Active Derate Average', 'Max Derate', 'Warning Hours'),
         specs=[[{"secondary_y": False}, {"secondary_y": False}, {"secondary_y": False}]]
     )
     
     # Active average
     fig.add_trace(
-        go.Bar(x=metrics_df['CAR_ID'], 
+        go.Bar(x=[str(int(car)) for car in metrics_df['equipment_id']], 
                y=metrics_df['Active_Avg'],
                name='Active Avg',
                marker_color='#ff6b6b'),
@@ -477,18 +477,18 @@ def create_car_performance_bars(df, unit_id):
     
     # Max derate
     fig.add_trace(
-        go.Bar(x=metrics_df['CAR_ID'], 
+        go.Bar(x=[str(int(car)) for car in metrics_df['equipment_id']], 
                y=metrics_df['Max_Derate'],
                name='Max Derate',
                marker_color='#8b0000'),
         row=1, col=2
     )
     
-    # Problem hours
+    # Warning hours
     fig.add_trace(
-        go.Bar(x=metrics_df['CAR_ID'], 
-               y=metrics_df['Problem_Hours'],
-               name='Problem Hours',
+        go.Bar(x=[str(int(car)) for car in metrics_df['equipment_id']], 
+               y=metrics_df['Warning_Hours'],
+               name='Warning Hours',
                marker_color='#ffa500'),
         row=1, col=3
     )
@@ -496,7 +496,11 @@ def create_car_performance_bars(df, unit_id):
     fig.update_layout(
         title=f'Unit {unit_id} - Car Performance Metrics',
         height=400,
-        showlegend=False
+        showlegend=False,
+        # Fix x-axis formatting to prevent abbreviation
+        xaxis=dict(type='category'),
+        xaxis2=dict(type='category'),
+        xaxis3=dict(type='category')
     )
     
     return fig
@@ -702,8 +706,8 @@ def main():
             st.markdown("### Unit Metrics Summary")
             unit_metrics = calculate_hybrid_metrics(df, selected_unit, selected_date)
             if not unit_metrics.empty:
-                # Round numeric columns
-                numeric_cols = ['Active_Avg_Derate', 'Max_Derate', 'Operational_Ratio']
+                # Round numeric columns (same as Fleet Analysis)
+                numeric_cols = ['Active_Avg_Derate', 'Max_Derate']
                 for col in numeric_cols:
                     if col in unit_metrics.columns:
                         unit_metrics[col] = unit_metrics[col].round(2)
