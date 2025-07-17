@@ -204,20 +204,47 @@ def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
     if selected_date and period == 'daily':
         unit_data = unit_data[unit_data['Date'] == selected_date]
         title_suffix = f" - {selected_date}"
+        
+        # For daily analysis: adjust hours to start at 5 AM
+        unit_data['Adjusted_Hour'] = unit_data['Hour'].apply(lambda x: x - 5 if x >= 5 else x + 19)
+        
+        # Create heatmap data using actual car IDs
+        heatmap_data = unit_data.groupby(['CAR_ID', 'Adjusted_Hour'])['derate_gap'].mean().reset_index()
+        heatmap_pivot = heatmap_data.pivot(index='CAR_ID', columns='Adjusted_Hour', values='derate_gap')
+        heatmap_pivot = heatmap_pivot.fillna(0)
+        
+        # Create hour labels starting from 5 AM
+        hour_labels = []
+        for h in range(24):
+            actual_hour = (h + 5) % 24
+            hour_labels.append(f"{actual_hour:02d}:00")
+        
+        x_labels = hour_labels
+        y_labels = [str(car_id) for car_id in heatmap_pivot.index]
+        
     else:
-        title_suffix = " - Weekly Average"
-    
-    if unit_data.empty:
-        return None
-    
-    # Create heatmap data
-    if period == 'daily':
-        heatmap_data = unit_data.groupby(['CAR', 'Hour'])['derate_gap'].mean().reset_index()
-    else:
-        heatmap_data = unit_data.groupby(['CAR', 'Hour'])['derate_gap'].mean().reset_index()
-    
-    heatmap_pivot = heatmap_data.pivot(index='CAR', columns='Hour', values='derate_gap')
-    heatmap_pivot = heatmap_pivot.fillna(0)
+        title_suffix = " - Weekly Overview"
+        
+        # For weekly analysis: show cars × days
+        # Create a combination of Date and CAR_ID for Y-axis
+        unit_data['Date_Car'] = unit_data['Date'].astype(str) + ' - ' + unit_data['CAR_ID']
+        
+        # Adjust hours to start at 5 AM
+        unit_data['Adjusted_Hour'] = unit_data['Hour'].apply(lambda x: x - 5 if x >= 5 else x + 19)
+        
+        # Create heatmap data
+        heatmap_data = unit_data.groupby(['Date_Car', 'Adjusted_Hour'])['derate_gap'].mean().reset_index()
+        heatmap_pivot = heatmap_data.pivot(index='Date_Car', columns='Adjusted_Hour', values='derate_gap')
+        heatmap_pivot = heatmap_pivot.fillna(0)
+        
+        # Create hour labels starting from 5 AM
+        hour_labels = []
+        for h in range(24):
+            actual_hour = (h + 5) % 24
+            hour_labels.append(f"{actual_hour:02d}:00")
+        
+        x_labels = hour_labels
+        y_labels = heatmap_pivot.index
     
     # Define your color scale
     colorscale = [
@@ -231,11 +258,11 @@ def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
     
     fig = go.Figure(data=go.Heatmap(
         z=heatmap_pivot.values,
-        x=[f"{h:02d}:00" for h in heatmap_pivot.columns],
-        y=[f"Car {car}" for car in heatmap_pivot.index],
+        x=x_labels,
+        y=y_labels,
         colorscale=colorscale,
         hoverongaps=False,
-        hovertemplate='<b>Car %{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
+        hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
         colorbar=dict(title="Derate %"),
         zmin=0,
         zmax=40
@@ -243,9 +270,9 @@ def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
     
     fig.update_layout(
         title=f'Unit {unit_id} - Car Performance{title_suffix}',
-        xaxis_title="Hour of Day",
-        yaxis_title="Car Number",
-        height=400,
+        xaxis_title="Hour of Day (Starting 5 AM)",
+        yaxis_title="Car ID" if period == 'daily' else "Date - Car ID",
+        height=400 if period == 'daily' else 800,  # Taller for weekly view
         font=dict(size=12)
     )
     
@@ -336,10 +363,10 @@ def create_car_performance_bars(df, unit_id):
     """Create car performance bar chart"""
     unit_data = df[df['UNIT'] == unit_id].copy()
     
-    # Calculate metrics per car
+    # Calculate metrics per car using actual car IDs
     car_metrics = []
-    for car_num in sorted(unit_data['CAR'].unique()):
-        car_data = unit_data[unit_data['CAR'] == car_num]
+    for car_id in sorted(unit_data['CAR_ID'].unique()):
+        car_data = unit_data[unit_data['CAR_ID'] == car_id]
         
         # Active derate average
         active_data = car_data[car_data['derate_gap'] > 5]
@@ -352,7 +379,7 @@ def create_car_performance_bars(df, unit_id):
         problem_hours = (car_data['derate_gap'] > 10).sum()
         
         car_metrics.append({
-            'Car': car_num,
+            'CAR_ID': car_id,
             'Active_Avg': active_avg,
             'Max_Derate': max_derate,
             'Problem_Hours': problem_hours
@@ -368,7 +395,7 @@ def create_car_performance_bars(df, unit_id):
     
     # Active average
     fig.add_trace(
-        go.Bar(x=[f"Car {car}" for car in metrics_df['Car']], 
+        go.Bar(x=metrics_df['CAR_ID'], 
                y=metrics_df['Active_Avg'],
                name='Active Avg',
                marker_color='#ff6b6b'),
@@ -377,7 +404,7 @@ def create_car_performance_bars(df, unit_id):
     
     # Max derate
     fig.add_trace(
-        go.Bar(x=[f"Car {car}" for car in metrics_df['Car']], 
+        go.Bar(x=metrics_df['CAR_ID'], 
                y=metrics_df['Max_Derate'],
                name='Max Derate',
                marker_color='#8b0000'),
@@ -386,7 +413,7 @@ def create_car_performance_bars(df, unit_id):
     
     # Problem hours
     fig.add_trace(
-        go.Bar(x=[f"Car {car}" for car in metrics_df['Car']], 
+        go.Bar(x=metrics_df['CAR_ID'], 
                y=metrics_df['Problem_Hours'],
                name='Problem Hours',
                marker_color='#ffa500'),
@@ -556,13 +583,13 @@ def main():
             if selected_date and period == "Daily Analysis":
                 unit_data = unit_data[unit_data['Date'] == selected_date]
             
-            # Calculate worst car
+            # Calculate worst car using actual car IDs
             car_active_avg = []
-            for car_num in unit_data['CAR'].unique():
-                car_data = unit_data[unit_data['CAR'] == car_num]
+            for car_id in unit_data['CAR_ID'].unique():
+                car_data = unit_data[unit_data['CAR_ID'] == car_id]
                 active_data = car_data[car_data['derate_gap'] > 5]
                 active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
-                car_active_avg.append((car_num, active_avg))
+                car_active_avg.append((car_id, active_avg))
             
             if car_active_avg:
                 worst_car = max(car_active_avg, key=lambda x: x[1])
