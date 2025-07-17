@@ -40,13 +40,6 @@ st.markdown("""
         border-radius: 10px;
         margin: 0.5rem 0;
     }
-    .unit-info {
-        background-color: #e8f5e8;
-        padding: 1rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        border-left: 4px solid #4caf50;
-    }
     .alert-card {
         background-color: #ffebee;
         padding: 1rem;
@@ -54,12 +47,12 @@ st.markdown("""
         margin: 1rem 0;
         border-left: 4px solid #f44336;
     }
-    .warning-card {
-        background-color: #fff3e0;
+    .info-card {
+        background-color: #e3f2fd;
         padding: 1rem;
         border-radius: 10px;
         margin: 1rem 0;
-        border-left: 4px solid #ff9800;
+        border-left: 4px solid #2196f3;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -103,11 +96,13 @@ def load_sample_derate_data():
     data = []
     for bucket in dates:
         for equipment_id in equipment_ids:
-            # Generate realistic derate values (some cars perform worse)
-            if equipment_id in [55908, 56912]:  # Make some cars have higher derate
-                derate_gap = np.random.uniform(5, 35)
+            # Simulate realistic patterns: some cars not running (0%), some with issues
+            if np.random.random() < 0.15:  # 15% chance not running
+                derate_gap = 0.0
+            elif equipment_id in [55908, 56912]:  # Some cars with more issues
+                derate_gap = np.random.uniform(0, 40)
             elif equipment_id in [54908, 59912]:  # Some moderate issues
-                derate_gap = np.random.uniform(2, 25)
+                derate_gap = np.random.uniform(0, 25)
             else:  # Generally good performance
                 derate_gap = np.random.uniform(0, 15)
             
@@ -142,233 +137,353 @@ def process_derate_data(df):
         df['CAR'] = [mapping['CAR'] for mapping in unit_car_mapping]
         df['CAR_ID'] = [mapping['CAR_ID'] for mapping in unit_car_mapping]
         
+        # Calculate operational status
+        df['Is_Running'] = df['derate_gap'] > 0
+        df['Is_Problem'] = df['derate_gap'] > 10
+        df['Is_Critical'] = df['derate_gap'] > 20
+        df['Is_Active_Derate'] = df['derate_gap'] > 5
+        
         # Calculate additional metrics
         df['Power_Available'] = 100 - df['derate_gap']
-        df['Status'] = df['derate_gap'].apply(
-            lambda x: 'Normal' if x < 10 else 'Warning' if x < 20 else 'Critical'
-        )
-        
-        # Create labels for visualization
-        df['Car_Label'] = df['UNIT'] + '-C' + df['CAR'].astype(str)
-        df['Full_Label'] = df['UNIT'] + '-C' + df['CAR'].astype(str) + ' (' + df['CAR_ID'] + ')'
         
         return df
     except Exception as e:
         st.error(f"Error processing derate data: {str(e)}")
         return None
 
-def create_unit_heatmap(df, unit_id):
-    """Create heatmap for a specific unit"""
+def calculate_hybrid_metrics(df, unit_id=None, date=None):
+    """Calculate hybrid metrics for analysis"""
+    # Filter data if needed
+    filtered_df = df.copy()
+    if unit_id:
+        filtered_df = filtered_df[filtered_df['UNIT'] == unit_id]
+    if date:
+        filtered_df = filtered_df[filtered_df['Date'] == date]
+    
+    # Calculate metrics by car
+    metrics = []
+    
+    for car_info in filtered_df.groupby(['UNIT', 'CAR', 'CAR_ID']):
+        (unit, car_num, car_id), car_data = car_info
+        
+        # Hybrid metrics
+        total_hours = len(car_data)
+        operational_hours = (car_data['derate_gap'] > 0).sum()
+        problem_hours = (car_data['derate_gap'] > 10).sum()
+        critical_hours = (car_data['derate_gap'] > 20).sum()
+        
+        # Active derate average (only when > 5%)
+        active_derate_data = car_data[car_data['derate_gap'] > 5]
+        active_avg = active_derate_data['derate_gap'].mean() if len(active_derate_data) > 0 else 0
+        
+        # Max derate
+        max_derate = car_data['derate_gap'].max()
+        
+        # Operational ratio
+        operational_ratio = (operational_hours / total_hours * 100) if total_hours > 0 else 0
+        
+        metrics.append({
+            'UNIT': unit,
+            'CAR': car_num,
+            'CAR_ID': car_id,
+            'Active_Avg_Derate': active_avg,
+            'Max_Derate': max_derate,
+            'Problem_Hours': problem_hours,
+            'Critical_Hours': critical_hours,
+            'Operational_Hours': operational_hours,
+            'Operational_Ratio': operational_ratio,
+            'Total_Hours': total_hours
+        })
+    
+    return pd.DataFrame(metrics)
+
+def create_unit_car_heatmap(df, unit_id, selected_date=None, period='daily'):
+    """Create car heatmap with your color scheme"""
     unit_data = df[df['UNIT'] == unit_id].copy()
+    
+    if selected_date and period == 'daily':
+        unit_data = unit_data[unit_data['Date'] == selected_date]
+        title_suffix = f" - {selected_date}"
+    else:
+        title_suffix = " - Weekly Average"
     
     if unit_data.empty:
         return None
     
-    # Create heatmap data: Date x Hour with average derate across all cars
-    heatmap_data = unit_data.groupby(['Date', 'Hour'])['derate_gap'].mean().reset_index()
-    heatmap_pivot = heatmap_data.pivot(index='Date', columns='Hour', values='derate_gap')
+    # Create heatmap data
+    if period == 'daily':
+        heatmap_data = unit_data.groupby(['CAR', 'Hour'])['derate_gap'].mean().reset_index()
+    else:
+        heatmap_data = unit_data.groupby(['CAR', 'Hour'])['derate_gap'].mean().reset_index()
+    
+    heatmap_pivot = heatmap_data.pivot(index='CAR', columns='Hour', values='derate_gap')
     heatmap_pivot = heatmap_pivot.fillna(0)
+    
+    # Define your color scale
+    colorscale = [
+        [0, '#D3D3D3'],      # Light Grey (0%)
+        [0.05, '#D3D3D3'],   # Light Grey (0-5%)
+        [0.1, '#FFFF00'],    # Yellow (5-10%)
+        [0.2, '#FFA500'],    # Amber (10-20%)
+        [0.35, '#FF8C00'],   # Dark Amber (20-35%)
+        [1, '#8B0000']       # Dark Red (35%+)
+    ]
     
     fig = go.Figure(data=go.Heatmap(
         z=heatmap_pivot.values,
         x=[f"{h:02d}:00" for h in heatmap_pivot.columns],
-        y=[str(date) for date in heatmap_pivot.index],
-        colorscale='RdYlBu_r',
+        y=[f"Car {car}" for car in heatmap_pivot.index],
+        colorscale=colorscale,
         hoverongaps=False,
-        hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Avg Derate: %{z:.1f}%<extra></extra>',
-        colorbar=dict(title="Avg Derate %")
+        hovertemplate='<b>Car %{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
+        colorbar=dict(title="Derate %"),
+        zmin=0,
+        zmax=40
     ))
     
     fig.update_layout(
-        title=f'Unit {unit_id} - Average Derate by Hour',
+        title=f'Unit {unit_id} - Car Performance{title_suffix}',
         xaxis_title="Hour of Day",
-        yaxis_title="Date",
-        height=500
+        yaxis_title="Car Number",
+        height=400,
+        font=dict(size=12)
     )
     
     return fig
 
-def create_car_heatmap(df, unit_id):
-    """Create heatmap showing individual car performance for a unit"""
+def create_active_derate_chart(df, unit_id, period='daily'):
+    """Create active derate average line chart"""
     unit_data = df[df['UNIT'] == unit_id].copy()
     
-    if unit_data.empty:
-        return None
+    if period == 'daily':
+        # Group by date and calculate active derate average
+        daily_data = []
+        for date in sorted(unit_data['Date'].unique()):
+            date_data = unit_data[unit_data['Date'] == date]
+            active_data = date_data[date_data['derate_gap'] > 5]
+            active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
+            daily_data.append({'Date': date, 'Active_Avg_Derate': active_avg})
+        
+        chart_data = pd.DataFrame(daily_data)
+        x_col = 'Date'
+        title = f'Unit {unit_id} - Daily Active Derate Average (>5%)'
+    else:
+        # Group by hour across the week
+        hourly_data = unit_data[unit_data['derate_gap'] > 5].groupby('Hour')['derate_gap'].mean().reset_index()
+        hourly_data.columns = ['Hour', 'Active_Avg_Derate']
+        chart_data = hourly_data
+        x_col = 'Hour'
+        title = f'Unit {unit_id} - Hourly Active Derate Average (>5%)'
     
-    # Create heatmap: Car x Hour with average derate
-    car_heatmap = unit_data.groupby(['Car_Label', 'Hour'])['derate_gap'].mean().reset_index()
-    car_pivot = car_heatmap.pivot(index='Car_Label', columns='Hour', values='derate_gap')
-    car_pivot = car_pivot.fillna(0)
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=car_pivot.values,
-        x=[f"{h:02d}:00" for h in car_pivot.columns],
-        y=car_pivot.index,
-        colorscale='RdYlBu_r',
-        hoverongaps=False,
-        hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
-        colorbar=dict(title="Derate %")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=chart_data[x_col],
+        y=chart_data['Active_Avg_Derate'],
+        mode='lines+markers',
+        name='Active Derate Avg',
+        line=dict(width=3, color='#ff6b6b')
     ))
     
     fig.update_layout(
-        title=f'Unit {unit_id} - Car Performance by Hour',
-        xaxis_title="Hour of Day",
-        yaxis_title="Car",
-        height=400
-    )
-    
-    return fig
-
-def create_fleet_overview_heatmap(df):
-    """Create overview heatmap for entire fleet"""
-    # Fleet-wide heatmap: All cars x hours
-    fleet_heatmap = df.groupby(['Full_Label', 'Hour'])['derate_gap'].mean().reset_index()
-    fleet_pivot = fleet_heatmap.pivot(index='Full_Label', columns='Hour', values='derate_gap')
-    fleet_pivot = fleet_pivot.fillna(0)
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=fleet_pivot.values,
-        x=[f"{h:02d}:00" for h in fleet_pivot.columns],
-        y=fleet_pivot.index,
-        colorscale='RdYlBu_r',
-        hoverongaps=False,
-        hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
-        colorbar=dict(title="Derate %")
-    ))
-    
-    fig.update_layout(
-        title='Fleet Overview - All Cars Performance by Hour',
-        xaxis_title="Hour of Day",
-        yaxis_title="Car (Unit-CarNum-ID)",
-        height=600
-    )
-    
-    return fig
-
-def create_fleet_by_units_heatmap(df):
-    """Create heatmap showing fleet performance grouped by units"""
-    # Create unit-based aggregated heatmap
-    unit_heatmap = df.groupby(['UNIT', 'Hour'])['derate_gap'].mean().reset_index()
-    unit_pivot = unit_heatmap.pivot(index='UNIT', columns='Hour', values='derate_gap')
-    unit_pivot = unit_pivot.fillna(0)
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=unit_pivot.values,
-        x=[f"{h:02d}:00" for h in unit_pivot.columns],
-        y=unit_pivot.index,
-        colorscale='RdYlBu_r',
-        hoverongaps=False,
-        hovertemplate='<b>Unit %{y}</b><br>Hour: %{x}<br>Avg Derate: %{z:.1f}%<extra></extra>',
-        colorbar=dict(title="Avg Derate %")
-    ))
-    
-    fig.update_layout(
-        title='Fleet Performance by Units - Hourly Average',
-        xaxis_title="Hour of Day",
-        yaxis_title="Unit",
+        title=title,
+        xaxis_title=x_col,
+        yaxis_title="Active Derate Average (%)",
         height=300
     )
     
     return fig
 
-def create_problem_identification_chart(df):
-    """Create chart to identify problematic cars"""
-    # Calculate metrics for each car
-    car_metrics = df.groupby(['UNIT', 'Car_Label', 'CAR_ID']).agg({
-        'derate_gap': ['mean', 'max', 'std', 'count'],
-        'Status': lambda x: (x == 'Critical').sum()
-    }).reset_index()
+def create_problem_hours_chart(df, unit_id):
+    """Create problem hours identification chart"""
+    unit_data = df[df['UNIT'] == unit_id].copy()
     
-    # Flatten columns
-    car_metrics.columns = ['UNIT', 'Car_Label', 'CAR_ID', 'Avg_Derate', 'Max_Derate', 'Std_Derate', 'Records', 'Critical_Count']
+    # Count problem hours by hour of day
+    problem_by_hour = unit_data[unit_data['derate_gap'] > 10].groupby('Hour').size().reset_index(name='Problem_Count')
+    critical_by_hour = unit_data[unit_data['derate_gap'] > 20].groupby('Hour').size().reset_index(name='Critical_Count')
     
-    # Calculate problem score (weighted combination of metrics)
-    car_metrics['Problem_Score'] = (
-        car_metrics['Avg_Derate'] * 0.4 +
-        car_metrics['Max_Derate'] * 0.3 +
-        car_metrics['Std_Derate'] * 0.2 +
-        (car_metrics['Critical_Count'] / car_metrics['Records'] * 100) * 0.1
-    )
+    # Merge data
+    all_hours = pd.DataFrame({'Hour': range(24)})
+    problem_data = all_hours.merge(problem_by_hour, on='Hour', how='left').fillna(0)
+    problem_data = problem_data.merge(critical_by_hour, on='Hour', how='left').fillna(0)
     
-    # Sort by problem score
-    car_metrics = car_metrics.sort_values('Problem_Score', ascending=False)
-    
-    # Create bar chart
     fig = go.Figure()
     
-    # Color bars by unit
-    colors = {'180108': '#1f77b4', '180112': '#ff7f0e'}
+    fig.add_trace(go.Bar(
+        x=[f"{h:02d}:00" for h in problem_data['Hour']],
+        y=problem_data['Problem_Count'],
+        name='Problem Hours (>10%)',
+        marker_color='#ffa500'
+    ))
     
-    for unit in car_metrics['UNIT'].unique():
-        unit_data = car_metrics[car_metrics['UNIT'] == unit]
-        fig.add_trace(go.Bar(
-            x=unit_data['Car_Label'],
-            y=unit_data['Problem_Score'],
-            name=f'Unit {unit}',
-            marker_color=colors.get(unit, '#7f7f7f'),
-            text=unit_data['Problem_Score'].round(1),
-            textposition='auto',
-            hovertemplate='<b>%{x}</b><br>' +
-                         'Problem Score: %{y:.1f}<br>' +
-                         'Avg Derate: %{customdata[0]:.1f}%<br>' +
-                         'Max Derate: %{customdata[1]:.1f}%<br>' +
-                         '<extra></extra>',
-            customdata=unit_data[['Avg_Derate', 'Max_Derate']].values
-        ))
+    fig.add_trace(go.Bar(
+        x=[f"{h:02d}:00" for h in problem_data['Hour']],
+        y=problem_data['Critical_Count'],
+        name='Critical Hours (>20%)',
+        marker_color='#8b0000'
+    ))
     
     fig.update_layout(
-        title='Problem Car Identification - Higher Score = More Issues',
-        xaxis_title="Car",
-        yaxis_title="Problem Score",
-        height=500,
-        xaxis_tickangle=-45
+        title=f'Unit {unit_id} - Problem Hours Distribution',
+        xaxis_title='Hour of Day',
+        yaxis_title='Number of Problem Events',
+        height=300,
+        barmode='group'
     )
     
-    return fig, car_metrics
+    return fig
 
-def create_performance_summary_table(df):
-    """Create performance summary table"""
-    summary = df.groupby(['UNIT', 'Car_Label', 'CAR_ID']).agg({
-        'derate_gap': ['mean', 'max', 'min', 'std'],
-        'Status': lambda x: pd.Series({
-            'Normal': (x == 'Normal').sum(),
-            'Warning': (x == 'Warning').sum(),
-            'Critical': (x == 'Critical').sum()
+def create_car_performance_bars(df, unit_id):
+    """Create car performance bar chart"""
+    unit_data = df[df['UNIT'] == unit_id].copy()
+    
+    # Calculate metrics per car
+    car_metrics = []
+    for car_num in sorted(unit_data['CAR'].unique()):
+        car_data = unit_data[unit_data['CAR'] == car_num]
+        
+        # Active derate average
+        active_data = car_data[car_data['derate_gap'] > 5]
+        active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
+        
+        # Max derate
+        max_derate = car_data['derate_gap'].max()
+        
+        # Problem hours
+        problem_hours = (car_data['derate_gap'] > 10).sum()
+        
+        car_metrics.append({
+            'Car': car_num,
+            'Active_Avg': active_avg,
+            'Max_Derate': max_derate,
+            'Problem_Hours': problem_hours
         })
-    }).reset_index()
     
-    # Flatten columns
-    summary.columns = ['UNIT', 'Car_Label', 'CAR_ID', 'Avg_Derate', 'Max_Derate', 'Min_Derate', 'Std_Derate', 'Normal_Count', 'Warning_Count', 'Critical_Count']
+    metrics_df = pd.DataFrame(car_metrics)
     
-    # Round numerical values
-    numerical_cols = ['Avg_Derate', 'Max_Derate', 'Min_Derate', 'Std_Derate']
-    for col in numerical_cols:
-        summary[col] = summary[col].round(2)
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=('Active Derate Average', 'Max Derate', 'Problem Hours'),
+        specs=[[{"secondary_y": False}, {"secondary_y": False}, {"secondary_y": False}]]
+    )
     
-    return summary
+    # Active average
+    fig.add_trace(
+        go.Bar(x=[f"Car {car}" for car in metrics_df['Car']], 
+               y=metrics_df['Active_Avg'],
+               name='Active Avg',
+               marker_color='#ff6b6b'),
+        row=1, col=1
+    )
+    
+    # Max derate
+    fig.add_trace(
+        go.Bar(x=[f"Car {car}" for car in metrics_df['Car']], 
+               y=metrics_df['Max_Derate'],
+               name='Max Derate',
+               marker_color='#8b0000'),
+        row=1, col=2
+    )
+    
+    # Problem hours
+    fig.add_trace(
+        go.Bar(x=[f"Car {car}" for car in metrics_df['Car']], 
+               y=metrics_df['Problem_Hours'],
+               name='Problem Hours',
+               marker_color='#ffa500'),
+        row=1, col=3
+    )
+    
+    fig.update_layout(
+        title=f'Unit {unit_id} - Car Performance Metrics',
+        height=400,
+        showlegend=False
+    )
+    
+    return fig
+
+def create_fleet_comparison(df):
+    """Create fleet comparison charts"""
+    # Calculate metrics for each unit
+    unit_metrics = []
+    for unit in df['UNIT'].unique():
+        unit_data = df[df['UNIT'] == unit]
+        
+        # Active derate average
+        active_data = unit_data[unit_data['derate_gap'] > 5]
+        active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
+        
+        # Other metrics
+        max_derate = unit_data['derate_gap'].max()
+        problem_hours = (unit_data['derate_gap'] > 10).sum()
+        operational_hours = (unit_data['derate_gap'] > 0).sum()
+        total_hours = len(unit_data)
+        availability = (operational_hours / total_hours * 100) if total_hours > 0 else 0
+        
+        unit_metrics.append({
+            'Unit': unit,
+            'Active_Avg_Derate': active_avg,
+            'Max_Derate': max_derate,
+            'Problem_Hours': problem_hours,
+            'Availability': availability
+        })
+    
+    metrics_df = pd.DataFrame(unit_metrics)
+    
+    # Create comparison chart
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=('Active Derate Average', 'Max Derate', 'Problem Hours', 'Availability %'),
+        specs=[[{"secondary_y": False}, {"secondary_y": False}],
+               [{"secondary_y": False}, {"secondary_y": False}]]
+    )
+    
+    colors = ['#1f77b4', '#ff7f0e']
+    
+    # Active average
+    fig.add_trace(go.Bar(x=metrics_df['Unit'], y=metrics_df['Active_Avg_Derate'], 
+                         name='Active Avg', marker_color=colors), row=1, col=1)
+    
+    # Max derate
+    fig.add_trace(go.Bar(x=metrics_df['Unit'], y=metrics_df['Max_Derate'], 
+                         name='Max Derate', marker_color=colors), row=1, col=2)
+    
+    # Problem hours
+    fig.add_trace(go.Bar(x=metrics_df['Unit'], y=metrics_df['Problem_Hours'], 
+                         name='Problem Hours', marker_color=colors), row=2, col=1)
+    
+    # Availability
+    fig.add_trace(go.Bar(x=metrics_df['Unit'], y=metrics_df['Availability'], 
+                         name='Availability', marker_color=colors), row=2, col=2)
+    
+    fig.update_layout(
+        title='Fleet Comparison - Unit Performance',
+        height=600,
+        showlegend=False
+    )
+    
+    return fig
 
 def main():
     # Header
     st.markdown('<div class="main-header">🚂 Fleet Derate Analysis Dashboard</div>', unsafe_allow_html=True)
-    st.markdown("**Fleet Engineer Dashboard** - Identify problematic cars and analyze derate patterns across your fleet")
+    st.markdown("**Fleet Engineer Dashboard** - Hybrid metrics for real performance analysis")
     
     # Sidebar
-    st.sidebar.markdown("## 🔧 Fleet Analysis Options")
+    st.sidebar.markdown("## 🔧 Fleet Data")
     
     # Data source selection
     data_source = st.sidebar.radio(
-        "Choose data source:",
+        "Data Source:",
         ["Upload Fleet Data", "Use Sample Data"]
     )
     
     df = None
     
     if data_source == "Upload Fleet Data":
-        st.sidebar.markdown("### 📁 Upload Derate Data")
         uploaded_file = st.sidebar.file_uploader(
             "Upload CSV/Excel with derate data",
             type=['csv', 'xlsx', 'xls'],
-            help="Should include columns: bucket, equipment_id, derate_gap"
+            help="Columns: bucket, equipment_id, derate_gap"
         )
         
         if uploaded_file is not None:
@@ -379,12 +494,8 @@ def main():
                     df = pd.read_excel(uploaded_file)
                 
                 df = process_derate_data(df)
-                
                 if df is not None:
                     st.sidebar.success("✅ Data loaded successfully!")
-                    st.sidebar.markdown(f"**Records:** {len(df)}")
-                    st.sidebar.markdown(f"**Cars:** {df['equipment_id'].nunique()}")
-                    st.sidebar.markdown(f"**Date Range:** {df['Date'].min()} to {df['Date'].max()}")
                     
             except Exception as e:
                 st.error(f"Error loading file: {str(e)}")
@@ -394,164 +505,192 @@ def main():
     else:
         df = load_sample_derate_data()
         df = process_derate_data(df)
-        st.sidebar.markdown("### 🎯 Sample Fleet Data")
-        st.sidebar.info("Using sample data for Units 180108 and 180112")
+        st.sidebar.success("✅ Sample data loaded")
     
     if df is not None:
-        # Fleet overview
-        st.markdown('<div class="sub-header">🚂 Fleet Overview</div>', unsafe_allow_html=True)
+        # Collapsible data overview
+        with st.expander("📊 Data Overview", expanded=False):
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Records", len(df))
+            with col2:
+                st.metric("Units", df['UNIT'].nunique())
+            with col3:
+                st.metric("Cars", df['equipment_id'].nunique())
+            with col4:
+                active_data = df[df['derate_gap'] > 5]
+                fleet_active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
+                st.metric("Fleet Active Avg", f"{fleet_active_avg:.1f}%")
+            
+            # Fleet structure
+            st.markdown("**Fleet Structure:**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Unit 180108:** 50908, 54908, 55908, 56908, 59908")
+            with col2:
+                st.markdown("**Unit 180112:** 50912, 54912, 55912, 56912, 59912")
         
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Total Records", len(df))
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Units", df['UNIT'].nunique())
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col3:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            st.metric("Cars", df['equipment_id'].nunique())
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        with col4:
-            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-            avg_derate = df['derate_gap'].mean()
-            st.metric("Fleet Avg Derate", f"{avg_derate:.1f}%")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Fleet structure display
-        st.markdown('<div class="unit-info">', unsafe_allow_html=True)
-        st.markdown("**Fleet Structure:**")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Unit 180108:**")
-            unit_180108_cars = df[df['UNIT'] == '180108']['CAR_ID'].unique()
-            for car_id in sorted(unit_180108_cars):
-                car_num = df[df['CAR_ID'] == car_id]['CAR'].iloc[0]
-                avg_derate = df[df['CAR_ID'] == car_id]['derate_gap'].mean()
-                st.markdown(f"• Car {car_num}: {car_id} (Avg: {avg_derate:.1f}%)")
-        
-        with col2:
-            st.markdown("**Unit 180112:**")
-            unit_180112_cars = df[df['UNIT'] == '180112']['CAR_ID'].unique()
-            for car_id in sorted(unit_180112_cars):
-                car_num = df[df['CAR_ID'] == car_id]['CAR'].iloc[0]
-                avg_derate = df[df['CAR_ID'] == car_id]['derate_gap'].mean()
-                st.markdown(f"• Car {car_num}: {car_id} (Avg: {avg_derate:.1f}%)")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Problem identification
-        st.markdown('<div class="sub-header">🚨 Problem Car Identification</div>', unsafe_allow_html=True)
-        
-        problem_fig, problem_data = create_problem_identification_chart(df)
-        st.plotly_chart(problem_fig, use_container_width=True)
-        
-        # Show top 3 problematic cars
-        top_problems = problem_data.head(3)
-        if len(top_problems) > 0:
-            st.markdown('<div class="alert-card">', unsafe_allow_html=True)
-            st.markdown("**⚠️ Top 3 Problematic Cars:**")
-            for _, row in top_problems.iterrows():
-                st.markdown(f"• **{row['Car_Label']} ({row['CAR_ID']})**: Problem Score {row['Problem_Score']:.1f} - Avg Derate: {row['Avg_Derate']:.1f}%")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Create tabs for different views
-        tab1, tab2, tab3 = st.tabs(["📊 By Unit", "🔍 All Cars", "📈 Fleet Summary"])
+        # Main analysis tabs
+        tab1, tab2 = st.tabs(["📊 UNIT Analysis", "🚁 Fleet Analysis"])
         
         with tab1:
-            st.markdown("### Unit-Specific Analysis")
+            st.markdown("### Unit Performance Analysis")
             
-            # Unit selection
-            selected_unit = st.selectbox("Select Unit:", df['UNIT'].unique())
+            col1, col2, col3 = st.columns([1, 1, 1])
             
+            with col1:
+                selected_unit = st.selectbox("Select Unit:", df['UNIT'].unique())
+            
+            with col2:
+                period = st.selectbox("Analysis Period:", ["Daily Analysis", "Weekly Analysis"])
+            
+            with col3:
+                if period == "Daily Analysis":
+                    available_dates = sorted(df['Date'].unique())
+                    selected_date = st.selectbox("Select Date:", available_dates)
+                else:
+                    selected_date = None
+            
+            # Worst performing car alert
+            unit_data = df[df['UNIT'] == selected_unit]
+            if selected_date and period == "Daily Analysis":
+                unit_data = unit_data[unit_data['Date'] == selected_date]
+            
+            # Calculate worst car
+            car_active_avg = []
+            for car_num in unit_data['CAR'].unique():
+                car_data = unit_data[unit_data['CAR'] == car_num]
+                active_data = car_data[car_data['derate_gap'] > 5]
+                active_avg = active_data['derate_gap'].mean() if len(active_data) > 0 else 0
+                car_active_avg.append((car_num, active_avg))
+            
+            if car_active_avg:
+                worst_car = max(car_active_avg, key=lambda x: x[1])
+                if worst_car[1] > 15:  # Alert threshold
+                    st.markdown('<div class="alert-card">', unsafe_allow_html=True)
+                    st.markdown(f"🚨 **Maintenance Alert**: Car {worst_car[0]} has highest active derate average of {worst_car[1]:.1f}%")
+                    st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Main heatmap
+            heatmap_fig = create_unit_car_heatmap(df, selected_unit, selected_date, 
+                                                 'daily' if period == "Daily Analysis" else 'weekly')
+            if heatmap_fig:
+                st.plotly_chart(heatmap_fig, use_container_width=True)
+            
+            # Additional insights
             col1, col2 = st.columns(2)
             
             with col1:
-                # Unit daily heatmap
-                unit_daily_fig = create_unit_heatmap(df, selected_unit)
-                if unit_daily_fig:
-                    st.plotly_chart(unit_daily_fig, use_container_width=True)
+                # Active derate trend
+                active_chart = create_active_derate_chart(df, selected_unit, 
+                                                        'daily' if period == "Daily Analysis" else 'weekly')
+                if active_chart:
+                    st.plotly_chart(active_chart, use_container_width=True)
             
             with col2:
-                # Unit car performance heatmap
-                unit_car_fig = create_car_heatmap(df, selected_unit)
-                if unit_car_fig:
-                    st.plotly_chart(unit_car_fig, use_container_width=True)
+                # Problem hours
+                problem_chart = create_problem_hours_chart(df, selected_unit)
+                if problem_chart:
+                    st.plotly_chart(problem_chart, use_container_width=True)
             
-            # Unit statistics
-            unit_stats = df[df['UNIT'] == selected_unit].groupby('Car_Label').agg({
-                'derate_gap': ['mean', 'max', 'std'],
-                'Status': lambda x: (x == 'Critical').sum()
-            }).round(2)
-            unit_stats.columns = ['Avg Derate', 'Max Derate', 'Std Dev', 'Critical Count']
+            # Car performance metrics
+            car_bars = create_car_performance_bars(df, selected_unit)
+            if car_bars:
+                st.plotly_chart(car_bars, use_container_width=True)
             
-            st.markdown(f"### Unit {selected_unit} - Car Performance Summary")
-            st.dataframe(unit_stats, use_container_width=True)
+            # Unit metrics table
+            st.markdown("### Unit Metrics Summary")
+            unit_metrics = calculate_hybrid_metrics(df, selected_unit, selected_date)
+            if not unit_metrics.empty:
+                # Round numeric columns
+                numeric_cols = ['Active_Avg_Derate', 'Max_Derate', 'Operational_Ratio']
+                for col in numeric_cols:
+                    if col in unit_metrics.columns:
+                        unit_metrics[col] = unit_metrics[col].round(2)
+                
+                st.dataframe(unit_metrics, use_container_width=True)
         
         with tab2:
-            st.markdown("### All Cars Analysis")
+            st.markdown("### Fleet Analysis")
             
-            # Fleet overview heatmap
-            fleet_fig = create_fleet_overview_heatmap(df)
-            if fleet_fig:
-                st.plotly_chart(fleet_fig, use_container_width=True)
+            # Fleet comparison
+            fleet_comparison_fig = create_fleet_comparison(df)
+            if fleet_comparison_fig:
+                st.plotly_chart(fleet_comparison_fig, use_container_width=True)
             
-            # Performance summary table
-            st.markdown("### Detailed Performance Summary")
-            summary_table = create_performance_summary_table(df)
-            st.dataframe(summary_table, use_container_width=True)
-        
-        with tab3:
-            st.markdown("### Fleet Summary by Units")
+            # Fleet overview heatmap (all cars)
+            st.markdown("### Fleet Overview - All Cars")
+            fleet_heatmap_data = df.groupby(['UNIT', 'CAR', 'Hour'])['derate_gap'].mean().reset_index()
+            fleet_heatmap_data['Car_Label'] = fleet_heatmap_data['UNIT'] + '-C' + fleet_heatmap_data['CAR'].astype(str)
             
-            # Fleet by units heatmap
-            fleet_units_fig = create_fleet_by_units_heatmap(df)
-            if fleet_units_fig:
-                st.plotly_chart(fleet_units_fig, use_container_width=True)
+            fleet_pivot = fleet_heatmap_data.pivot(index='Car_Label', columns='Hour', values='derate_gap')
+            fleet_pivot = fleet_pivot.fillna(0)
             
-            # Unit comparison metrics
-            col1, col2 = st.columns(2)
+            # Same color scale
+            colorscale = [
+                [0, '#D3D3D3'],      # Light Grey
+                [0.05, '#D3D3D3'],   # Light Grey
+                [0.1, '#FFFF00'],    # Yellow
+                [0.2, '#FFA500'],    # Amber
+                [0.35, '#FF8C00'],   # Dark Amber
+                [1, '#8B0000']       # Dark Red
+            ]
             
-            with col1:
-                st.markdown("**Unit Performance Comparison**")
-                unit_comparison = df.groupby('UNIT').agg({
-                    'derate_gap': ['mean', 'max', 'std'],
-                    'Status': lambda x: (x == 'Critical').sum()
-                }).round(2)
-                unit_comparison.columns = ['Avg Derate', 'Max Derate', 'Std Dev', 'Critical Events']
-                st.dataframe(unit_comparison, use_container_width=True)
+            fleet_fig = go.Figure(data=go.Heatmap(
+                z=fleet_pivot.values,
+                x=[f"{h:02d}:00" for h in fleet_pivot.columns],
+                y=fleet_pivot.index,
+                colorscale=colorscale,
+                hoverongaps=False,
+                hovertemplate='<b>%{y}</b><br>Hour: %{x}<br>Derate: %{z:.1f}%<extra></extra>',
+                colorbar=dict(title="Derate %"),
+                zmin=0,
+                zmax=40
+            ))
             
-            with col2:
-                st.markdown("**Daily Trends**")
-                daily_trends = df.groupby(['Date', 'UNIT'])['derate_gap'].mean().reset_index()
-                
-                fig_trends = go.Figure()
-                for unit in df['UNIT'].unique():
-                    unit_data = daily_trends[daily_trends['UNIT'] == unit]
-                    fig_trends.add_trace(go.Scatter(
-                        x=unit_data['Date'],
-                        y=unit_data['derate_gap'],
-                        mode='lines+markers',
-                        name=f'Unit {unit}',
-                        line=dict(width=3)
-                    ))
-                
-                fig_trends.update_layout(
-                    title='Daily Average Derate Trends',
-                    xaxis_title='Date',
-                    yaxis_title='Average Derate %',
-                    height=400
+            fleet_fig.update_layout(
+                title='Fleet Overview - All Cars Performance',
+                xaxis_title="Hour of Day",
+                yaxis_title="Car (Unit-CarNum)",
+                height=600
+            )
+            
+            st.plotly_chart(fleet_fig, use_container_width=True)
+            
+            # Problem car ranking
+            st.markdown("### Problem Car Ranking")
+            fleet_metrics = calculate_hybrid_metrics(df)
+            if not fleet_metrics.empty:
+                # Calculate problem score
+                fleet_metrics['Problem_Score'] = (
+                    fleet_metrics['Active_Avg_Derate'] * 0.4 +
+                    fleet_metrics['Max_Derate'] * 0.3 +
+                    (fleet_metrics['Problem_Hours'] / fleet_metrics['Total_Hours'] * 100) * 0.3
                 )
-                st.plotly_chart(fig_trends, use_container_width=True)
+                
+                # Sort by problem score
+                fleet_metrics = fleet_metrics.sort_values('Problem_Score', ascending=False)
+                
+                # Round numeric columns
+                numeric_cols = ['Active_Avg_Derate', 'Max_Derate', 'Operational_Ratio', 'Problem_Score']
+                for col in numeric_cols:
+                    if col in fleet_metrics.columns:
+                        fleet_metrics[col] = fleet_metrics[col].round(2)
+                
+                st.dataframe(fleet_metrics, use_container_width=True)
+                
+                # Top 3 problem cars
+                top_problems = fleet_metrics.head(3)
+                if len(top_problems) > 0:
+                    st.markdown('<div class="alert-card">', unsafe_allow_html=True)
+                    st.markdown("**🚨 Top 3 Problem Cars:**")
+                    for _, row in top_problems.iterrows():
+                        st.markdown(f"• **Car {row['CAR']} (Unit {row['UNIT']})**: Problem Score {row['Problem_Score']:.1f}")
+                    st.markdown('</div>', unsafe_allow_html=True)
         
         # Download section
-        st.markdown('<div class="sub-header">💾 Download Reports</div>', unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown("### 💾 Download Reports")
         
         col1, col2, col3 = st.columns(3)
         
@@ -567,24 +706,26 @@ def main():
                 )
         
         with col2:
-            if st.button("🚨 Download Problem Cars Report"):
-                problem_buffer = io.StringIO()
-                problem_data.to_csv(problem_buffer, index=False)
-                st.download_button(
-                    label="Download Problem Cars",
-                    data=problem_buffer.getvalue(),
-                    file_name="problem_cars_report.csv",
-                    mime="text/csv"
-                )
+            if st.button("🚨 Download Problem Cars"):
+                if 'fleet_metrics' in locals():
+                    problem_buffer = io.StringIO()
+                    fleet_metrics.to_csv(problem_buffer, index=False)
+                    st.download_button(
+                        label="Download Problem Cars Report",
+                        data=problem_buffer.getvalue(),
+                        file_name="problem_cars_report.csv",
+                        mime="text/csv"
+                    )
         
         with col3:
-            if st.button("📈 Download Summary Statistics"):
-                summary_buffer = io.StringIO()
-                summary_table.to_csv(summary_buffer, index=False)
+            if st.button("📈 Download Hybrid Metrics"):
+                metrics_buffer = io.StringIO()
+                hybrid_metrics = calculate_hybrid_metrics(df)
+                hybrid_metrics.to_csv(metrics_buffer, index=False)
                 st.download_button(
-                    label="Download Summary Stats",
-                    data=summary_buffer.getvalue(),
-                    file_name="fleet_summary_stats.csv",
+                    label="Download Hybrid Metrics",
+                    data=metrics_buffer.getvalue(),
+                    file_name="hybrid_metrics_report.csv",
                     mime="text/csv"
                 )
 
