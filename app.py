@@ -14,7 +14,7 @@ warnings.filterwarnings('ignore')
 # Set page config
 st.set_page_config(
     page_title="Fleet Derate Analysis Dashboard",
-    page_icon="🚂",
+    page_icon="https://amygdalabs.com/favicon.ico",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -651,7 +651,7 @@ def main():
                 st.markdown("**Unit 180112:** 50912, 54912, 55912, 56912, 59912")
         
         # Main analysis tabs
-        tab1, tab2 = st.tabs(["📊 UNIT Analysis", "🚁 Fleet Analysis"])
+        tab1, tab2, tab3 = st.tabs(["📊 UNIT Analysis", "🚁 Fleet Analysis", "📚 User Guide"])
         
         with tab1:
             st.markdown("### Unit Performance Analysis")
@@ -1032,6 +1032,10 @@ def main():
                     file_name="hybrid_metrics_report.csv",
                     mime="text/csv"
                 )
+
+    # Add Amygda link at bottom of sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Made by [Amygda](https://amygdalabs.com/ai)**")
 
 if __name__ == "__main__":
     main()
