@@ -168,9 +168,9 @@ def calculate_hybrid_metrics(df, unit_id=None, date=None):
         
         # Hybrid metrics
         total_hours = len(car_data)
-        operational_hours = (car_data['derate_gap'] > 0).sum()
-        problem_hours = (car_data['derate_gap'] > 10).sum()
-        critical_hours = (car_data['derate_gap'] > 20).sum()
+        operational_hours = (car_data['derate_gap'] >= 0).sum()  # ALL hours including 0% derate
+        warning_hours = (car_data['derate_gap'] > 10).sum()  # Renamed from problem_hours
+        high_derate_hours = (car_data['derate_gap'] > 20).sum()  # Renamed from critical_hours
         
         # Active derate average (only when > 5%)
         active_derate_data = car_data[car_data['derate_gap'] > 5]
@@ -188,8 +188,8 @@ def calculate_hybrid_metrics(df, unit_id=None, date=None):
             'CAR_ID': car_id,
             'Active_Avg_Derate': active_avg,
             'Max_Derate': max_derate,
-            'Problem_Hours': problem_hours,
-            'Critical_Hours': critical_hours,
+            'Warning_Hours': warning_hours,  # Renamed from Problem_Hours
+            'High_Derate_Hours': high_derate_hours,  # Renamed from Critical_Hours
             'Operational_Hours': operational_hours,
             'Operational_Ratio': operational_ratio,
             'Total_Hours': total_hours
@@ -801,7 +801,7 @@ def main():
                 fleet_metrics['Problem_Score'] = (
                     fleet_metrics['Active_Avg_Derate'] * 0.4 +
                     fleet_metrics['Max_Derate'] * 0.3 +
-                    (fleet_metrics['Problem_Hours'] / fleet_metrics['Total_Hours'] * 100) * 0.3
+                    (fleet_metrics['Warning_Hours'] / fleet_metrics['Total_Hours'] * 100) * 0.3
                 )
                 
                 # Sort by problem score
